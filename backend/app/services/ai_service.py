@@ -1,0 +1,136 @@
+"""AI Service: the *only* place an LLM is called.
+
+Produces a structured, enum-constrained recommendation. It never acts directly —
+the Policy Engine (policy_engine.py) always gets the final say. If no API key is
+configured, falls back to a deterministic rule-based mock so the pipeline is
+demoable and testable without network access.
+"""
+
+import json
+from dataclasses import dataclass, field
+
+from app.config import get_settings
+from app.models.recovery_attempt import RecommendedAction
+
+settings = get_settings()
+
+ALLOWED_ACTIONS = [a.value for a in RecommendedAction]
+
+SYSTEM_PROMPT = f"""You are the reasoning component of a payment recovery agent.
+Given context about a failed payment, recommend the single best next action.
+
+You MUST respond with ONLY a JSON object matching this exact schema, no prose:
+{{
+  "recommended_action": one of {ALLOWED_ACTIONS},
+  "confidence": float between 0 and 1,
+  "reason": short string explaining why,
+  "risk_flags": array of short strings (e.g. "repeat_failure", "high_value", "low_engagement")
+}}
+
+You do not decide whether the action is allowed to run — a downstream policy
+engine enforces compliance and business rules. Just recommend the best action
+given the context.
+"""
+
+
+@dataclass
+class AIDecision:
+    recommended_action: RecommendedAction
+    confidence: float
+    reason: str
+    risk_flags: list[str] = field(default_factory=list)
+
+    def to_json(self) -> dict:
+        return {
+            "recommended_action": self.recommended_action.value,
+            "confidence": self.confidence,
+            "reason": self.reason,
+            "risk_flags": self.risk_flags,
+        }
+
+
+def _rule_based_fallback(context: dict) -> AIDecision:
+    """Deterministic mock used when ANTHROPIC_API_KEY is not set."""
+    attempt_number = context["attempt_history"]["attempt_count"] + 1
+    amount = context["payment"]["amount"]
+
+    if amount < settings.cost_to_recover_threshold:
+        return AIDecision(
+            recommended_action=RecommendedAction.STOP,
+            confidence=0.95,
+            reason="Amount is below the cost-to-recover threshold.",
+            risk_flags=["low_value"],
+        )
+
+    if attempt_number > settings.max_recovery_attempts:
+        return AIDecision(
+            recommended_action=RecommendedAction.STOP,
+            confidence=0.9,
+            reason="Maximum recovery attempts already made.",
+            risk_flags=["exhausted_attempts"],
+        )
+
+    if attempt_number == 1:
+        return AIDecision(
+            recommended_action=RecommendedAction.RETRY_PAYMENT,
+            confidence=0.7,
+            reason="First failure — a simple retry link is the least intrusive next step.",
+            risk_flags=[],
+        )
+
+    if attempt_number == 2:
+        return AIDecision(
+            recommended_action=RecommendedAction.SEND_EMAIL,
+            confidence=0.65,
+            reason="Retry link unused — nudge via email with context on why payment failed.",
+            risk_flags=["repeat_failure"],
+        )
+
+    return AIDecision(
+        recommended_action=RecommendedAction.ESCALATE_MANUAL,
+        confidence=0.55,
+        reason="Multiple automated attempts failed — escalate for manual follow-up.",
+        risk_flags=["repeat_failure", "needs_human"],
+    )
+
+
+def _call_llm(context: dict) -> AIDecision:
+    from anthropic import Anthropic
+
+    client = Anthropic(api_key=settings.anthropic_api_key)
+    response = client.messages.create(
+        model=settings.ai_model,
+        max_tokens=300,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": json.dumps(context)}],
+    )
+    raw_text = response.content[0].text
+    data = json.loads(raw_text)
+
+    action = data["recommended_action"]
+    if action not in ALLOWED_ACTIONS:
+        raise ValueError(f"LLM returned an out-of-enum action: {action}")
+
+    return AIDecision(
+        recommended_action=RecommendedAction(action),
+        confidence=float(data.get("confidence", 0.5)),
+        reason=str(data.get("reason", "")),
+        risk_flags=list(data.get("risk_flags", [])),
+    )
+
+
+def get_recommended_action(context: dict) -> AIDecision:
+    """Context assembly result -> structured AI recommendation.
+
+    `context` is expected to carry: payment, customer, attempt_history
+    (see recovery_engine.build_context).
+    """
+    if not settings.anthropic_api_key:
+        return _rule_based_fallback(context)
+
+    try:
+        return _call_llm(context)
+    except (json.JSONDecodeError, ValueError, KeyError, IndexError):
+        # Malformed/out-of-schema LLM output must never reach business logic —
+        # fail safe to the deterministic path rather than guessing.
+        return _rule_based_fallback(context)
