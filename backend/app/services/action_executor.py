@@ -8,7 +8,7 @@ shows up in the audit trail regardless of whether delivery is real.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime,UTC
 
 from app.models.recovery_attempt import RecommendedAction
 
@@ -26,7 +26,7 @@ class ExecutionResult:
 def _send_email(to_email: str, subject: str, body: str) -> ExecutionResult:
     # TODO: replace with a real provider integration.
     logger.info("Sending email to=%s subject=%r body=%r", to_email, subject, body)
-    return ExecutionResult(success=True, channel="email", sent_at=datetime.utcnow(), detail=f"Email queued to {to_email}")
+    return ExecutionResult(success=True, channel="email", sent_at=datetime.now(UTC)(), detail=f"Email queued to {to_email}")
 
 
 def execute_action(action: RecommendedAction, customer: dict, payment: dict) -> ExecutionResult:
@@ -58,6 +58,6 @@ def execute_action(action: RecommendedAction, customer: dict, payment: dict) -> 
 
     if action == RecommendedAction.ESCALATE_MANUAL:
         logger.info("Escalating payment %s to manual follow-up queue", payment["id"])
-        return ExecutionResult(success=True, channel="manual", sent_at=datetime.utcnow(), detail="Escalated to manual follow-up queue.")
+        return ExecutionResult(success=True, channel="manual", sent_at=datetime.now(UTC)(), detail="Escalated to manual follow-up queue.")
 
     raise ValueError(f"Unhandled action: {action}")

@@ -7,7 +7,7 @@ produce the same decision.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time,UTC
 
 from app.config import get_settings
 from app.models.recovery_attempt import RecommendedAction
@@ -58,7 +58,7 @@ def evaluate_policy(
     attempt_history: dict,
     now: datetime | None = None,
 ) -> PolicyResult:
-    now = now or datetime.utcnow()
+    now = now or datetime.now(UTC)()
 
     # 1. Already resolved via another channel (reconciliation).
     if payment.get("status") == "recovered":

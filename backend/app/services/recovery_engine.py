@@ -8,7 +8,7 @@ Two-step by design (mirrors the API surface):
                 calls the Action Executor, then records the outcome.
 """
 
-from datetime import datetime
+from datetime import datetime,UTC
 
 from sqlalchemy.orm import Session
 
@@ -158,7 +158,7 @@ def execute(db: Session, attempt: RecoveryAttempt) -> RecoveryAttempt:
 
 def mark_outcome(db: Session, attempt: RecoveryAttempt, outcome: AttemptOutcome) -> RecoveryAttempt:
     attempt.outcome = outcome
-    attempt.outcome_at = datetime.utcnow()
+    attempt.outcome_at = datetime.now(UTC)()
 
     payment = attempt.payment
     if outcome == AttemptOutcome.RECOVERED:

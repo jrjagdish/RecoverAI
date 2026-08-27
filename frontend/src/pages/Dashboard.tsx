@@ -16,11 +16,20 @@ export function Dashboard() {
   useEffect(() => {
     Promise.all([endpoints.kpis(), endpoints.analytics(), endpoints.failedPayments()])
       .then(([k, a, p]) => {
+        // A misconfigured API base URL can make requests resolve to the
+        // frontend's own index.html (200 OK, wrong content) instead of a
+        // real 404 — guard against that shape mismatch rather than crashing
+        // on .map() over a non-array.
+        if (!Array.isArray(a.by_failure_reason) || !Array.isArray(a.by_action_type) || !Array.isArray(p)) {
+          throw new Error("Unexpected response shape from API");
+        }
         setKpis(k);
         setAnalytics(a);
         setFailedPayments(p);
       })
-      .catch(() => setError("Could not reach the RecoverAI API. Is the backend running?"));
+      .catch(() =>
+        setError("Could not reach the RecoverAI API. Check that VITE_API_URL points at the backend (with /api)."),
+      );
   }, []);
 
   if (error) {

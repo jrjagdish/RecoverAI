@@ -14,25 +14,39 @@ from dataclasses import dataclass, field
 
 from app.config import get_settings
 from app.models.recovery_attempt import RecommendedAction
+from groq import BadRequestError
 
 settings = get_settings()
 
 ALLOWED_ACTIONS = [a.value for a in RecommendedAction]
 
 SYSTEM_PROMPT = f"""You are the reasoning component of a payment recovery agent.
-Given context about a failed payment, recommend the single best next action.
 
-You MUST respond with ONLY a JSON object matching this exact schema, no prose:
+Given context about a failed payment, recommend exactly one best next action.
+
+You MUST return valid JSON and nothing else.
+
+Return this exact JSON structure:
+
 {{
-  "recommended_action": one of {ALLOWED_ACTIONS},
-  "confidence": float between 0 and 1,
-  "reason": short string explaining why,
-  "risk_flags": array of short strings (e.g. "repeat_failure", "high_value", "low_engagement")
+  "recommended_action": "...",
+  "confidence": 0.0,
+  "reason": "...",
+  "risk_flags": []
 }}
 
-You do not decide whether the action is allowed to run — a downstream policy
-engine enforces compliance and business rules. Just recommend the best action
-given the context.
+The "recommended_action" MUST be exactly one of:
+{ALLOWED_ACTIONS}
+
+"confidence" MUST be a number between 0 and 1.
+
+"reason" MUST be a short string.
+
+"risk_flags" MUST be an array of strings.
+
+Do not include markdown, code fences, explanations, or any text outside the JSON.
+
+You only recommend an action. A downstream policy engine decides whether the action is allowed.
 """
 
 
@@ -136,7 +150,8 @@ def get_recommended_action(context: dict) -> AIDecision:
 
     try:
         return _call_llm(context)
-    except (json.JSONDecodeError, ValueError, KeyError, IndexError):
+    except (json.JSONDecodeError, ValueError, KeyError, IndexError,BadRequestError):
         # Malformed/out-of-schema LLM output must never reach business logic —
         # fail safe to the deterministic path rather than guessing.
+        
         return _rule_based_fallback(context)
