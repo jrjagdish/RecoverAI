@@ -5,6 +5,7 @@ from app.api.deps import get_db, get_or_404
 from app.models.payment import Payment
 from app.models.recovery_attempt import PolicyDecision, RecoveryAttempt
 from app.schemas.attempt import RecoveryAttemptRead
+from app.schemas.payment import PaymentRead
 from app.services import recovery_engine
 
 router = APIRouter(prefix="/recovery", tags=["recovery"])
@@ -36,3 +37,16 @@ def execute_attempt(attempt_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(attempt)
     return attempt
+
+
+@router.post("/payments/{payment_id}/mark-recovered", response_model=PaymentRead)
+def mark_payment_recovered(payment_id: str, db: Session = Depends(get_db)):
+    """Manual reconciliation — the same effect a `payment.captured` webhook
+    has, for cases it can't reach automatically (no matching order id, testing,
+    or a channel outside Razorpay). Idempotent: re-marking an already-recovered
+    payment is a no-op."""
+    payment = get_or_404(db, Payment, payment_id, "payment")
+    payment = recovery_engine.reconcile_recovered(db, payment, source="manual")
+    db.commit()
+    db.refresh(payment)
+    return payment

@@ -17,6 +17,35 @@ logger = logging.getLogger("recoverai.webhooks")
 settings = get_settings()
 
 
+def _handle_payment_captured(db: Session, entity: dict) -> dict:
+    """Reconciliation: a successful payment for the same order as a payment
+    we previously logged as failed means that customer paid — via the retry
+    link we sent, or any other channel. Without this, recovered amounts never
+    show up on the dashboard no matter how many customers actually pay.
+    """
+    order_id = entity.get("order_id")
+    if not order_id:
+        db.commit()
+        return {"status": "ignored", "reason": "no order_id to correlate"}
+
+    at_risk_payment = (
+        db.query(Payment)
+        .filter(
+            Payment.razorpay_order_id == order_id,
+            Payment.status.in_([PaymentStatus.FAILED, PaymentStatus.RETRYING, PaymentStatus.STOPPED]),
+        )
+        .order_by(Payment.created_at.desc())
+        .first()
+    )
+    if at_risk_payment is None:
+        db.commit()
+        return {"status": "ignored", "reason": "no matching at-risk payment for this order"}
+
+    recovery_engine.reconcile_recovered(db, at_risk_payment, source="webhook")
+    db.commit()
+    return {"status": "recovered", "payment_id": at_risk_payment.id}
+
+
 @router.post("/razorpay")
 async def razorpay_webhook(
     request: Request,
@@ -33,6 +62,9 @@ async def razorpay_webhook(
     event = payload.get("event")
     entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
     razorpay_payment_id = entity.get("id")
+
+    if event == "payment.captured":
+        return _handle_payment_captured(db, entity)
 
     if event != "payment.failed":
         db.commit()
