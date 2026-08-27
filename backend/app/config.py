@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
-    anthropic_api_key: str = ""
-    ai_model: str = "claude-sonnet-5"
+    groq_api_key: str = ""
+    ai_model: str = "llama-3.3-70b-versatile"
 
     max_recovery_attempts: int = 3
     cost_to_recover_threshold: float = 50

@@ -65,4 +65,25 @@ app/
 - `policy_engine.evaluate_policy` takes plain dicts, not ORM objects, and has no
   side effects — write unit tests against it directly without a DB.
 - Razorpay webhooks are verified via HMAC (`core/security.py`) and de-duplicated
-  by `razorpay_payment_id` before processing (idempotent).
+  by `razorpay_payment_id` before processing (idempotent). On receipt of a
+  `payment.failed` event, the handler immediately runs it through
+  `recovery_engine.evaluate()` (and `execute()` if policy allows) — no manual
+  trigger or background worker needed to see the pipeline react to real events.
+- AI recommendations are powered by Groq (`GROQ_API_KEY` in `.env`); with no key
+  set, `ai_service.py` falls back to a deterministic rule-based mock.
+
+## Connecting real Razorpay data
+
+1. Set `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` in `.env` (test-mode keys work).
+2. Expose your local server publicly, e.g. `ngrok http 8000`.
+3. In the Razorpay Dashboard → Settings → Webhooks, add a webhook pointing at
+   `<your-ngrok-url>/api/webhooks/razorpay`, subscribed to `payment.failed`.
+4. Copy the webhook secret Razorpay generates into `RAZORPAY_WEBHOOK_SECRET` in
+   `.env` — without it, signature verification is skipped (fine for local
+   testing, not for anything public).
+5. Trigger a failed payment with one of Razorpay's test cards, or use the
+   "Test Webhook" replay button in the dashboard to resend a sample payload.
+6. Check it landed: `GET /api/payments`, `GET /api/payments/{id}/attempts`,
+   `GET /api/audit/payment/{id}`, or just watch the frontend dashboard —
+   the payment, AI recommendation, policy decision, and action all appear
+   automatically, no seed script involved.

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy import case
 
 from app.api.deps import get_db
 from app.models.payment import Payment, PaymentStatus
@@ -52,7 +53,7 @@ def get_analytics(db: Session = Depends(get_db)):
         db.query(
             func.coalesce(Payment.failure_reason, "unknown"),
             func.sum(Payment.amount),
-            func.sum(func.case((Payment.status == PaymentStatus.RECOVERED, Payment.amount), else_=0)),
+            func.sum(case((Payment.status == PaymentStatus.RECOVERED, Payment.amount), else_=0)),
         )
         .group_by(func.coalesce(Payment.failure_reason, "unknown"))
         .all()

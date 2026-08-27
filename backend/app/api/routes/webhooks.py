@@ -8,6 +8,8 @@ from app.config import get_settings
 from app.core.security import verify_razorpay_signature
 from app.models.customer import Customer
 from app.models.payment import Payment, PaymentStatus
+from app.models.recovery_attempt import PolicyDecision
+from app.services import recovery_engine
 from app.services.recovery_engine import log_audit
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -31,15 +33,6 @@ async def razorpay_webhook(
     event = payload.get("event")
     entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
     razorpay_payment_id = entity.get("id")
-
-    log_audit(
-        db,
-        entity_type="payment",
-        entity_id=razorpay_payment_id or "unknown",
-        event_type="webhook_received",
-        actor="system",
-        payload={"event": event, "razorpay_payment_id": razorpay_payment_id},
-    )
 
     if event != "payment.failed":
         db.commit()
@@ -69,10 +62,31 @@ async def razorpay_webhook(
         failure_reason=entity.get("error_description") or entity.get("error_reason"),
     )
     db.add(payment)
+    db.flush()
+
+    # Logged against the internal payment id (not the raw Razorpay id) so it
+    # shows up in that payment's /audit/payment/{id} timeline alongside every
+    # later event.
+    log_audit(
+        db,
+        entity_type="payment",
+        entity_id=payment.id,
+        event_type="webhook_received",
+        actor="system",
+        payload={"event": event, "razorpay_payment_id": razorpay_payment_id},
+    )
+
+    # Immediately run it through the recovery pipeline: context -> AI -> policy
+    # -> (if allowed) action. Keeps the dashboard live off real webhook traffic
+    # without needing a background worker running.
+    attempt = recovery_engine.evaluate(db, payment)
+    if attempt.policy_decision == PolicyDecision.ALLOWED:
+        recovery_engine.execute(db, attempt)
+
     db.commit()
     db.refresh(payment)
 
-    return {"status": "recorded", "payment_id": payment.id}
+    return {"status": "recorded", "payment_id": payment.id, "attempt_id": attempt.id}
 
 
 @router.get("/razorpay/verify")

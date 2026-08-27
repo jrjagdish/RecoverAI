@@ -4,6 +4,9 @@ Produces a structured, enum-constrained recommendation. It never acts directly â
 the Policy Engine (policy_engine.py) always gets the final say. If no API key is
 configured, falls back to a deterministic rule-based mock so the pipeline is
 demoable and testable without network access.
+
+Uses Groq's OpenAI-compatible chat completions API with JSON-object response
+mode for structured output.
 """
 
 import json
@@ -50,7 +53,7 @@ class AIDecision:
 
 
 def _rule_based_fallback(context: dict) -> AIDecision:
-    """Deterministic mock used when ANTHROPIC_API_KEY is not set."""
+    """Deterministic mock used when GROQ_API_KEY is not set."""
     attempt_number = context["attempt_history"]["attempt_count"] + 1
     amount = context["payment"]["amount"]
 
@@ -95,16 +98,19 @@ def _rule_based_fallback(context: dict) -> AIDecision:
 
 
 def _call_llm(context: dict) -> AIDecision:
-    from anthropic import Anthropic
+    from groq import Groq
 
-    client = Anthropic(api_key=settings.anthropic_api_key)
-    response = client.messages.create(
+    client = Groq(api_key=settings.groq_api_key)
+    response = client.chat.completions.create(
         model=settings.ai_model,
         max_tokens=300,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": json.dumps(context)}],
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(context)},
+        ],
     )
-    raw_text = response.content[0].text
+    raw_text = response.choices[0].message.content
     data = json.loads(raw_text)
 
     action = data["recommended_action"]
@@ -125,7 +131,7 @@ def get_recommended_action(context: dict) -> AIDecision:
     `context` is expected to carry: payment, customer, attempt_history
     (see recovery_engine.build_context).
     """
-    if not settings.anthropic_api_key:
+    if not settings.groq_api_key:
         return _rule_based_fallback(context)
 
     try:
