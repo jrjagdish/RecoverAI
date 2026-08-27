@@ -158,7 +158,7 @@ def execute(db: Session, attempt: RecoveryAttempt) -> RecoveryAttempt:
 
 def mark_outcome(db: Session, attempt: RecoveryAttempt, outcome: AttemptOutcome) -> RecoveryAttempt:
     attempt.outcome = outcome
-    attempt.outcome_at = datetime.now(UTC)()
+    attempt.outcome_at = datetime.now(UTC)
 
     payment = attempt.payment
     if outcome == AttemptOutcome.RECOVERED:
@@ -179,3 +179,46 @@ def mark_outcome(db: Session, attempt: RecoveryAttempt, outcome: AttemptOutcome)
     )
     db.flush()
     return attempt
+
+
+def reconcile_recovered(db: Session, payment: Payment, source: str = "manual") -> Payment:
+    """Marks a payment recovered outside the normal attempt-outcome flow —
+    e.g. a `payment.captured` webhook for a payment that already has (or
+    never needed) a recovery attempt, or a manual reconciliation call.
+
+    Without this, `mark_outcome()` only ever fires if something explicitly
+    tracks an attempt through to its outcome — which nothing did, leaving
+    every batch's recovered total stuck at zero regardless of real payment
+    activity.
+    """
+    if payment.status == PaymentStatus.RECOVERED:
+        return payment  # already reconciled — idempotent
+
+    latest_attempt = (
+        db.query(RecoveryAttempt)
+        .filter(RecoveryAttempt.payment_id == payment.id, RecoveryAttempt.outcome == AttemptOutcome.PENDING)
+        .order_by(RecoveryAttempt.attempt_number.desc())
+        .first()
+    )
+    if latest_attempt is not None:
+        mark_outcome(db, latest_attempt, AttemptOutcome.RECOVERED)
+        return payment
+
+    now = datetime.now(UTC)
+    payment.status = PaymentStatus.RECOVERED
+    payment.recovered_at = now
+    if payment.batch is not None:
+        batch: RecoveryBatch = payment.batch
+        batch.total_amount_recovered += payment.amount
+        batch.recovered_count += 1
+
+    log_audit(
+        db,
+        entity_type="payment",
+        entity_id=payment.id,
+        event_type="outcome_recorded",
+        actor=source,
+        payload={"outcome": AttemptOutcome.RECOVERED.value, "via": source},
+    )
+    db.flush()
+    return payment

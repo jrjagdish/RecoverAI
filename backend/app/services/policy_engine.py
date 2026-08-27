@@ -58,7 +58,7 @@ def evaluate_policy(
     attempt_history: dict,
     now: datetime | None = None,
 ) -> PolicyResult:
-    now = now or datetime.now(UTC)()
+    now = now or datetime.now(UTC)
 
     # 1. Already resolved via another channel (reconciliation).
     if payment.get("status") == "recovered":

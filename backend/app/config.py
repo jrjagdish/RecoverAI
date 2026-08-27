@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     env: str = "development"
     api_prefix: str = "/api"
 
-    database_url: str = ""
+    database_url: str = "sqlite:///./recoverai.db"
 
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/0"
