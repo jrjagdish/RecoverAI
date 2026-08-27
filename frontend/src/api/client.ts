@@ -10,8 +10,12 @@ import type {
   RecoveryBatch,
 } from "../types";
 
+// `||` (not `??`) deliberately — an empty-string env var (e.g. a blank
+// VITE_API_URL set in the host's dashboard) must also fall through, or every
+// request becomes a same-origin relative call that silently 200s against the
+// SPA's own index.html instead of erroring.
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000/api",
+  baseURL: import.meta.env.VITE_API_URL || "https://recoverai-f6ih.onrender.com/api",
 });
 
 export const endpoints = {
